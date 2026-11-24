@@ -2,7 +2,7 @@
 import * as C from './calc.js';
 import * as S from './store.js';
 
-export const APP_VERSION = '1.0.0';
+export const APP_VERSION = '1.1.0';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -59,6 +59,11 @@ function moneyField(id, label, value, { hint = '', required = false, placeholder
     ${hint ? `<p class="hint" id="${id}-hint">${hint}</p>` : ''}
   </div>`;
 }
+const HL_ICON = { extra: 'up', surplus: 'up', spending: 'check', debt: 'shield', worth: 'star', logging: 'flame' };
+const HL_LABEL = { extra: 'Extra income', surplus: 'Surplus', spending: 'Spending', debt: 'Debt', worth: 'Net worth', logging: 'Consistency' };
+function hlItem(h) {
+  return `<li class="hl hl-${h.kind}"><span class="hl-icon">${I[HL_ICON[h.kind]] || I.star}</span><div><p class="hl-kind">${HL_LABEL[h.kind] || ''}</p><p class="hl-title">${esc(h.title)}</p><p class="small muted">${esc(h.text)}</p></div></li>`;
+}
 const toneLabel = { good: 'Going well', tip: 'Idea', 'heads-up': 'Heads-up' };
 function chip(tone) { return `<span class="chip chip-${tone}">${toneLabel[tone]}</span>`; }
 
@@ -112,6 +117,10 @@ function viewHome() {
   const lv = C.levelInfo(C.totalXP(state));
   const loan = C.loanInfo(state);
   const tips = C.insights(state);
+  const wins = C.highlights(state);
+  const sur = C.monthlySurpluses(state);
+  const curSur = sur.find((x) => x.month === C.monthKey(today));
+  const lastSur = [...sur].reverse().find((x) => x.complete);
   const wk = C.weekKey(today);
   const userTasks = state.tasks.filter((t) => t.repeat === 'weekly' || !t.done || (t.doneAt && C.weekKey(t.doneAt) === wk));
   const autos = C.autoTasks(state);
@@ -159,6 +168,13 @@ function viewHome() {
       <p><span class="label">Last week (savings)</span> <span class="num ${lastChange > 0 ? 'pos' : ''}">${lastChange == null ? 'No check-in yet' : C.signed(lastChange)}</span></p>
       <p><span class="label">Since you started</span> <span class="num ${sinceStart > 0 ? 'pos' : ''}">${sinceStart == null ? '—' : C.signed(sinceStart)}</span></p>
     </div>
+  </section>
+  <section class="card" aria-labelledby="wins-h"><h2 id="wins-h">Wins to notice</h2>
+    <div class="flow">
+      <p><span class="label">Cash this month</span> <span class="num ${curSur?.change > 0 ? 'pos' : ''}">${curSur ? C.signed(curSur.change) + ' so far' : 'Check in to see'}</span></p>
+      <p><span class="label">${lastSur ? C.monthLabel(lastSur.month, true).split(' ')[0] : 'Last month'}</span> <span class="num ${lastSur?.change > 0 ? 'pos' : ''}">${lastSur ? (lastSur.change > 0 ? 'Surplus ' : lastSur.change < 0 ? 'Short ' : 'Even ') + C.moneyShort(Math.abs(lastSur.change)) : 'Not finished yet'}</span></p>
+    </div>
+    ${wins.length ? `<ul class="hl-list">${wins.slice(0, 4).map(hlItem).join('')}</ul>` : '<p class="muted">Your wins show up here as you check in: surplus months, weeks under your spending plan, debt paid down, extra income banked and streaks.</p>'}
   </section>
   <section class="card" aria-labelledby="buf-h"><h2 id="buf-h">Savings buffer</h2>${gauge}</section>
   <section class="stats" aria-label="Streak and level">
@@ -218,7 +234,8 @@ function weeklyForm(sub) {
     <div class="field"><label for="ci-date">Date</label><input id="ci-date" name="date" type="date" value="${existing ? existing.date : date}" max="${today}" required></div>
     ${moneyField('ci-savings', 'Savings balance', c.savings, { required: true, hint: 'Zero is fine. Honest numbers make the trend useful.' })}
     ${moneyField('ci-checking', 'Checking balance', c.checking)}
-    ${moneyField('ci-spent', 'Spending money used this week', c.spent, { hint: state.paycheck.weeklySpending ? `Your plan is ${C.money(state.paycheck.weeklySpending)} a week.` : '' })}
+    ${moneyField('ci-spent', 'Spending money used this week', c.spent, { hint: state.plan.weeklySpending ? `Your plan is ${C.money(state.plan.weeklySpending)} a week. Coming in under earns bonus XP.` : '' })}
+    ${moneyField('ci-extra', 'Extra income this week', c.extraIncome, { hint: 'Money beyond regular paychecks, like a UC class payment, bonus or refund. Moving at least half of it to savings earns a badge.' })}
     <fieldset class="field"><legend>Any new debt this week?</legend>
       <div class="choice"><label><input type="radio" name="newDebt" value="no" ${c.newDebt === false ? 'checked' : ''} required> No</label>
       <label><input type="radio" name="newDebt" value="yes" ${c.newDebt === true ? 'checked' : ''}> Yes</label></div>
@@ -235,7 +252,7 @@ function viewReward() {
   const r = ui.reward;
   return `<section class="reward" aria-labelledby="rw-h">
     <p class="eyebrow">${r.updated ? 'Check-in updated' : 'Check-in saved'}</p>
-    <h1 id="rw-h" tabindex="-1">${r.savingsChange > 0 ? 'Savings up ' + C.moneyShort(r.savingsChange) : r.savingsChange < 0 ? 'Savings down ' + C.moneyShort(-r.savingsChange) : r.isFirst ? 'You’re on the board' : 'Savings held steady'}</h1>
+    <h1 id="rw-h" tabindex="-1">${r.savingsChange > 0 ? 'Savings up ' + C.moneyShort(r.savingsChange) : r.highlights.length ? esc(r.highlights[0].title) : r.savingsChange < 0 ? 'Savings down ' + C.moneyShort(-r.savingsChange) + ' this week' : r.isFirst ? 'You’re on the board' : 'Savings held steady'}</h1>
     <p class="reward-line">${esc(r.line)}</p>
     <dl class="reward-grid">
       ${r.months != null ? `<div><dt>Months of bills saved</dt><dd>${r.months.toFixed(1)}</dd></div>` : ''}
@@ -243,6 +260,8 @@ function viewReward() {
       <div><dt>XP earned</dt><dd>+${r.xp}</dd></div>
       <div><dt>Streak</dt><dd>${r.streak} ${r.streak === 1 ? 'week' : 'weeks'}</dd></div>
     </dl>
+    ${r.highlights.length ? `<div class="highlights"><h2>Wins this week</h2><ul class="hl-list">${r.highlights.map(hlItem).join('')}</ul></div>` : ''}
+    <details class="xp-detail"><summary>How you earned ${r.xp} XP</summary><ul>${r.xpParts.map(([k, v]) => `<li><span>${esc(k)}</span><span class="num">+${v}</span></li>`).join('')}</ul></details>
     ${r.levelUp ? `<p class="levelup">${I.star} Level ${r.level} reached</p>` : ''}
     ${r.badges.length ? `<div class="new-badges"><h2>New badge${r.badges.length > 1 ? 's' : ''}</h2>${r.badges.map((b) => `<div class="badge earned">${I.badge}<div><strong>${esc(b.name)}</strong><p class="small">${esc(b.desc)}</p></div></div>`).join('')}</div>` : ''}
     <div class="stack">
@@ -291,6 +310,7 @@ function readMonthlyInputs() {
   return out;
 }
 
+function freqOptions(sel) { return Object.entries(C.FREQS).map(([k, f]) => `<option value="${k}" ${k === sel ? 'selected' : ''}>${f.label}</option>`).join(''); }
 const CATEGORIES = ['Housing', 'Utilities', 'Phone & internet', 'Transportation', 'Insurance', 'Debt payments', 'Childcare', 'Subscriptions', 'Health', 'Other'];
 
 function viewBills() {
@@ -303,7 +323,6 @@ function viewBills() {
   const groups = {};
   for (const b of active) (groups[b.category || 'Other'] ||= []).push(b);
   const plan = C.planMonthly(state);
-  const p = state.paycheck;
 
   const billRow = (b, isEnded) => `<li class="bill ${isEnded ? 'ended' : ''}">
     <div class="bill-main"><label class="sr" for="bn-${b.id}">Bill name</label><input id="bn-${b.id}" class="bill-name" data-bill="${b.id}" data-field="name" value="${esc(b.name)}">
@@ -338,20 +357,46 @@ function viewBills() {
       <div class="money-input small"><span aria-hidden="true">$</span><label class="sr" for="nc-amount">Monthly amount</label><input id="nc-amount" inputmode="decimal" placeholder="0" required></div>
       <button class="btn ghost" type="submit">Add</button></form></section>
 
-  <section class="card form" aria-labelledby="pp-h" data-form="plan"><h2 id="pp-h">Paycheck plan</h2>
-    <p class="small muted">Paid every two weeks. Monthly figures use 26 paychecks ÷ 12 months.</p>
-    ${moneyField('pp-takeHome', 'Take-home pay per paycheck', p.takeHome, { attrs: 'data-plan="takeHome"' })}
-    ${moneyField('pp-toSavings', 'Sent to savings per paycheck', p.toSavings, { attrs: 'data-plan="toSavings"' })}
-    ${moneyField('pp-weeklySpending', 'Spending money per week', p.weeklySpending, { attrs: 'data-plan="weeklySpending"' })}
+  <section class="card" aria-labelledby="inc-h"><div class="group-h"><h2 id="inc-h">Household income</h2><span class="num">${plan.income == null ? '' : C.money(plan.income) + '/mo'}</span></div>
+    <p class="small muted">Take-home pay for everyone in the household. Each source can have its own schedule. Monthly figures are averages: every two weeks = 26 a year ÷ 12.</p>
+    <ul class="bills">${(state.incomes || []).map((x) => `<li class="bill income">
+      <div class="bill-main"><label class="sr" for="in-${x.id}">Income name</label><input id="in-${x.id}" class="bill-name" data-income="${x.id}" data-field="name" value="${esc(x.name)}">
+        <div class="money-input small"><span aria-hidden="true">$</span><label class="sr" for="ia-${x.id}">Amount per payment for ${esc(x.name)}</label><input id="ia-${x.id}" data-income="${x.id}" data-field="amount" inputmode="decimal" value="${esc(val(x.amount))}"></div></div>
+      <div class="bill-meta"><label class="sr" for="if-${x.id}">How often</label><select id="if-${x.id}" data-income="${x.id}" data-field="freq">${freqOptions(x.freq)}</select>
+        ${x.freq === 'perYear' ? `<label for="ic-${x.id}">Times a year</label><input id="ic-${x.id}" class="count" data-income="${x.id}" data-field="count" inputmode="decimal" value="${esc(val(x.count))}">` : ''}
+        <button class="btn text danger" data-action="del-income" data-id="${x.id}" aria-label="Delete ${esc(x.name)}">Delete</button></div>
+      <label class="switch small"><input type="checkbox" data-income="${x.id}" data-field="reliable" ${x.reliable !== false ? 'checked' : ''}> Steady income I can count on every month</label>
+      <p class="small muted">About ${C.money(C.incomeMonthly(x))} a month on average.</p>
+    </li>`).join('')}</ul>
+    ${!(state.incomes || []).length ? '<p class="muted">No income added yet.</p>' : ''}
+    <form class="form sub-form" data-form="add-income"><h3>Add income</h3>
+      <div class="chips" aria-label="Common income types">
+        <button type="button" class="chip-btn" data-action="inc-preset" data-name="My pay" data-freq="biweekly">My pay (every 2 weeks)</button>
+        <button type="button" class="chip-btn" data-action="inc-preset" data-name="Spouse’s pay" data-freq="monthly">Spouse’s pay (monthly)</button>
+        <button type="button" class="chip-btn" data-action="inc-preset" data-name="Teaching (per class)" data-freq="perYear">Per class or gig</button>
+      </div>
+      <div class="field"><label for="ni-name">Name</label><input id="ni-name" placeholder="Spouse’s pay" autocomplete="off"></div>
+      ${moneyField('ni-amount', 'Take-home per payment', null, { required: true })}
+      <div class="field"><label for="ni-freq">How often</label><select id="ni-freq">${freqOptions('biweekly')}</select></div>
+      <div class="field" id="ni-count-wrap" hidden><label for="ni-count">About how many times a year?</label><input id="ni-count" inputmode="decimal" placeholder="4" aria-describedby="ni-count-h"><p class="hint" id="ni-count-h">If it varies, use the low end. Anything extra becomes a pleasant surprise.</p></div>
+      <p class="form-error" role="alert" id="ni-error"></p>
+      <button class="btn primary wide" type="submit">Add income</button></form>
+  </section>
+
+  <section class="card form" aria-labelledby="pp-h"><h2 id="pp-h">Monthly plan</h2>
+    ${moneyField('pp-savingsMonthly', 'Send to savings each month', state.plan.savingsMonthly, { attrs: 'data-plan="savingsMonthly"' })}
+    ${moneyField('pp-weeklySpending', 'Household spending money per week', state.plan.weeklySpending, { attrs: 'data-plan="weeklySpending"', hint: 'Groceries, gas, eating out, fun. Everything that isn’t a bill.' })}
     <dl class="plan-table">
-      <div><dt>Take-home per month</dt><dd>${C.money(plan.income)}</dd></div>
+      <div><dt>Income per month (average)</dt><dd>${C.money(plan.income)}</dd></div>
+      ${plan.irregular ? `<div class="indent"><dt>Steady</dt><dd>${C.money(plan.reliable)}</dd></div><div class="indent"><dt>Irregular, averaged</dt><dd>${C.money(plan.irregular)}</dd></div>` : ''}
       <div><dt>Bills</dt><dd>−${C.money(plan.bills)}</dd></div>
       <div><dt>Savings contributions</dt><dd>−${C.money(plan.contrib)}</dd></div>
       <div><dt>To savings</dt><dd>−${C.money(plan.toSavings ?? 0)}</dd></div>
       <div><dt>Spending money</dt><dd>−${C.money(plan.spending ?? 0)}</dd></div>
-      <div class="total"><dt>Left unassigned</dt><dd class="${plan.leftover < 0 ? 'neg' : ''}">${plan.leftover == null ? 'Add take-home pay' : C.money(plan.leftover)}</dd></div>
+      <div class="total"><dt>Planned surplus</dt><dd class="${plan.leftover < 0 ? 'neg' : ''}">${plan.leftover == null ? 'Add income' : C.signed(plan.leftover, false)}</dd></div>
+      ${plan.irregular ? `<div><dt>On steady income only</dt><dd class="${plan.leftoverReliable < 0 ? 'neg' : ''}">${C.signed(plan.leftoverReliable, false)}</dd></div>` : ''}
     </dl>
-    ${plan.leftover != null && plan.leftover < 0 ? '<p class="small warn">The plan spends more than comes in. Lower spending money or savings per paycheck until this is zero or more.</p>' : ''}
+    ${plan.leftover != null && plan.leftover < 0 ? '<p class="small warn">The plan spends more than comes in. Lower spending money or the savings amount until this is zero or more.</p>' : plan.leftover > 0 ? `<p class="small muted">A planned surplus of ${C.moneyShort(plan.leftover)} a month. Each month you actually finish ahead earns a Surplus month on your Growth tab.</p>` : ''}
   </section>`;
 }
 
@@ -366,11 +411,25 @@ function viewGrowth() {
   const retPts = ms.filter((m) => m.retirement1 != null || m.retirement2 != null).map((m) => ({ d: m.date, v: (m.retirement1 || 0) + (m.retirement2 || 0) }));
   const savPts = [...(state.start ? [{ d: state.start.date, v: state.start.savings || 0 }] : []), ...cs.map((c) => ({ d: c.date, v: c.savings }))];
   const earned = state.badges;
-  const debtsOf = (m) => C.ACCOUNT_FIELDS.filter((f) => f.kind === 'debt').reduce((s, f) => s + (m[f.key] || 0), 0);
+  const debtsOf = C.debtsOf;
+  const sur = C.monthlySurpluses(state).slice(-12);
+  const maxAbs = Math.max(1, ...sur.map((m) => Math.abs(m.change)));
+  const spendPts = C.spendingWeeks(state).map((w) => ({ d: w.date, v: w.spent }));
+  const sw = C.spendingWeeks(state);
+  const under = sw.filter((w) => w.under).length;
 
   return `<header class="top"><h1>Growth</h1></header>
   <section class="card" aria-labelledby="ch1"><h2 id="ch1">Total net worth</h2>${lineChart(nwPts, { title: 'Total net worth', id: 'c1' })}</section>
   <section class="card" aria-labelledby="ch3"><h2 id="ch3">Savings</h2>${lineChart(savPts, { title: 'Savings', id: 'c3' })}</section>
+  <section class="card" aria-labelledby="sp-h"><h2 id="sp-h">Surplus by month</h2>
+    <p class="small muted">Change in savings plus checking from one month’s last check-in to the next. Above zero means you came out ahead.</p>
+    ${sur.length ? `<ul class="surplus">${sur.slice().reverse().map((m) => `<li><span class="s-month">${C.monthLabel(m.month)}${m.complete ? '' : ' <span class="opt">so far</span>'}</span>
+      <span class="s-bar" aria-hidden="true"><span class="${m.change >= 0 ? 'up' : 'down'}" style="width:${(Math.abs(m.change) / maxAbs * 100).toFixed(1)}%"></span></span>
+      <span class="num ${m.change > 0 ? 'pos' : ''}">${m.change > 0 ? 'Surplus ' : m.change < 0 ? 'Short ' : 'Even '}${C.moneyShort(Math.abs(m.change))}</span></li>`).join('')}</ul>` : '<p class="chart-empty">Check in this week to start your first month.</p>'}
+  </section>
+  <section class="card" aria-labelledby="sw-h"><h2 id="sw-h">Weekly spending</h2>
+    ${sw.length && state.plan.weeklySpending != null ? `<p class="small muted">Under your ${C.moneyShort(state.plan.weeklySpending)} plan in ${under} of ${sw.length} weeks logged.</p>` : ''}
+    ${lineChart(spendPts, { title: 'Weekly spending', id: 'c4' })}</section>
   <section class="card" aria-labelledby="ch2"><h2 id="ch2">Retirement</h2>${lineChart(retPts, { title: 'Retirement', id: 'c2' })}</section>
   <section class="card" aria-labelledby="mh-h"><h2 id="mh-h">Monthly history</h2>
     ${ms.length ? `<div class="table-wrap"><table><thead><tr><th scope="col">Month</th><th scope="col">Total worth</th><th scope="col">Change</th><th scope="col">Retirement</th><th scope="col">Debts</th></tr></thead><tbody>
@@ -380,10 +439,13 @@ function viewGrowth() {
   <section class="card" aria-labelledby="wl-h"><h2 id="wl-h">Weekly log</h2>
     ${cs.length ? `<ul class="log">${cs.slice().reverse().map((c, i, arr) => { const p = arr[i + 1]; const ch = p ? c.savings - p.savings : null; return `<li><a href="#checkin/${c.date}" aria-label="Edit check-in for ${C.dateLabel(c.date, true)}">
       <div class="log-top"><strong>${C.dateLabel(c.date, true)}</strong><span class="num">${C.money(c.savings)}${ch != null ? ` <span class="${ch > 0 ? 'pos' : ''}">(${C.signed(ch)})</span>` : ''}</span></div>
-      <p class="small muted">${c.spent != null ? `Spent ${C.moneyShort(c.spent)} · ` : ''}New debt: ${c.newDebt ? 'yes' : 'no'}${c.win ? ` · Win: ${esc(c.win)}` : ''}</p></a></li>`; }).join('')}</ul>` : '<p class="muted">Your weekly check-ins will show up here.</p>'}
+      <p class="small muted">${c.spent != null ? `Spent ${C.moneyShort(c.spent)} · ` : ''}${c.extraIncome ? `Extra income ${C.moneyShort(c.extraIncome)} · ` : ''}New debt: ${c.newDebt ? 'yes' : 'no'}${c.win ? ` · Win: ${esc(c.win)}` : ''}</p></a></li>`; }).join('')}</ul>` : '<p class="muted">Your weekly check-ins will show up here.</p>'}
   </section>
   <section class="card" aria-labelledby="bd-h"><h2 id="bd-h">Badges <span class="muted small">${Object.keys(earned).length} of ${C.BADGES.length}</span></h2>
-    <ul class="badges">${C.BADGES.map((b) => `<li class="badge ${earned[b.id] ? 'earned' : 'locked'}">${earned[b.id] ? I.badge : I.lock}<div><strong>${esc(b.name)}</strong><p class="small">${esc(b.desc)}</p><p class="small muted">${earned[b.id] ? `Earned ${C.dateLabel(earned[b.id], true)}` : 'Not yet'}</p></div></li>`).join('')}</ul></section>
+    ${(() => { const card = (b) => `<li class="badge ${earned[b.id] ? 'earned' : 'locked'}">${earned[b.id] ? I.badge : I.lock}<div><strong>${esc(b.name)}</strong><p class="small">${esc(b.desc)}</p><p class="small muted">${earned[b.id] ? `Earned ${C.dateLabel(earned[b.id], true)}` : 'Not yet'}</p></div></li>`;
+      const got = C.BADGES.filter((b) => earned[b.id]), todo = C.BADGES.filter((b) => !earned[b.id]);
+      return `${got.length ? `<ul class="badges">${got.map(card).join('')}</ul>` : '<p class="muted">Your first badge comes with your first check-in.</p>'}
+      ${todo.length ? `<details class="paste"><summary>${todo.length} badges still to earn</summary><ul class="badges">${todo.map(card).join('')}</ul></details>` : ''}`; })()}</section>
   <section class="card" aria-labelledby="tk-h"><h2 id="tk-h">Your tasks</h2>
     <p class="small muted">Weekly tasks reset every Monday. One-time tasks stay done.</p>
     <ul class="task-edit">${state.tasks.map((t) => `<li><label class="sr" for="tt-${t.id}">Task</label><input id="tt-${t.id}" data-taskedit="${t.id}" data-field="text" value="${esc(t.text)}">
@@ -435,9 +497,9 @@ function viewData() {
 }
 
 // ---------- Setup ----------
-const SETUP_STEPS = ['welcome', 'balances', 'bills', 'paycheck', 'accounts'];
+const SETUP_STEPS = ['welcome', 'balances', 'bills', 'income', 'plan', 'accounts'];
 function newDraft() {
-  return { savings: null, checking: null, bills: [], paycheck: { takeHome: null, toSavings: null, weeklySpending: null }, accounts: {}, loanRemaining: null };
+  return { savings: null, checking: null, bills: [], incomes: [], plan: { savingsMonthly: null, weeklySpending: null }, accounts: {}, loanRemaining: null };
 }
 function viewSetup() {
   const d = (ui.draft ||= newDraft());
@@ -451,7 +513,7 @@ function viewSetup() {
       <p class="lead">A weekly money check-in that helps you build a cash cushion, one month of bills at a time.</p>
       <ul class="points"><li>${I.lock}<span><strong>Private by design.</strong> Everything stays on this phone. No bank links, no account, no tracking.</span></li>
       <li>${I.check}<span><strong>One minute a week.</strong> Log your savings, see your progress, keep your streak.</span></li>
-      <li>${I.growth}<span><strong>Setup takes about 2 minutes.</strong> Starting balances, bills and your paycheck plan.</span></li></ul></div>
+      <li>${I.growth}<span><strong>Setup takes about 2 minutes.</strong> Starting balances, bills, household income and a simple plan.</span></li></ul></div>
       <div class="stack"><button type="submit" class="btn primary wide big">Start setup</button><a class="btn ghost wide" href="#data">Restore from a backup instead</a></div>`;
   } else if (step === 'balances') {
     body = `<h1 tabindex="-1">Where you are today</h1><p class="muted">This is your starting line. Every bit of progress is measured from here.</p>
@@ -467,11 +529,28 @@ function viewSetup() {
         <button type="button" class="btn ghost" data-action="su-add-bill">Add</button></div>
       <div class="chips" aria-label="Common bills">${sugg.map((s) => `<button type="button" class="chip-btn" data-action="su-sugg" data-name="${esc(s)}">${esc(s)}</button>`).join('')}</div>
       ${nav(d.bills.length ? 'Next' : 'Next', true)}`;
-  } else if (step === 'paycheck') {
-    body = `<h1 tabindex="-1">Your paycheck plan</h1><p class="muted">Based on getting paid every two weeks.</p>
-      ${moneyField('su-takeHome', 'Take-home pay per paycheck', d.paycheck.takeHome, { hint: 'What lands in your account after taxes.' })}
-      ${moneyField('su-toSavings', 'Amount to send to savings per paycheck', d.paycheck.toSavings, { hint: 'Even $20 builds the habit.' })}
-      ${moneyField('su-weeklySpending', 'Spending money per week', d.paycheck.weeklySpending, { hint: 'Groceries, gas, fun. Whatever isn’t a bill.' })}${nav('Next', true)}`;
+  } else if (step === 'income') {
+    body = `<h1 tabindex="-1">Household income</h1><p class="muted">Add take-home pay for everyone in the household. Each source can have its own schedule, and irregular income like classes or gigs gets averaged.</p>
+      ${d.incomes.length ? `<ul class="draft-bills">${d.incomes.map((x, i) => `<li><span>${esc(x.name)}<br><span class="small muted">${esc(C.incomeDescription(x))}</span></span><span class="num">${C.money(C.incomeMonthly(x))}/mo</span><button type="button" class="btn text danger" data-action="su-del-income" data-i="${i}" aria-label="Remove ${esc(x.name)}">Remove</button></li>`).join('')}
+        <li class="total"><span>Average per month</span><span class="num">${C.money(d.incomes.reduce((s2, x) => s2 + C.incomeMonthly(x), 0))}</span><span></span></li></ul>` : ''}
+      <div class="chips" aria-label="Common income types">
+        <button type="button" class="chip-btn" data-action="su-inc-preset" data-name="My pay" data-freq="biweekly">My pay (every 2 weeks)</button>
+        <button type="button" class="chip-btn" data-action="su-inc-preset" data-name="Spouse’s pay" data-freq="monthly">Spouse’s pay (monthly)</button>
+        <button type="button" class="chip-btn" data-action="su-inc-preset" data-name="Teaching (per class)" data-freq="perYear">Per class or gig</button>
+      </div>
+      <div class="field"><label for="su-iname">Name</label><input id="su-iname" autocomplete="off" placeholder="My pay"></div>
+      ${moneyField('su-iamt', 'Take-home per payment', null, { required: true })}
+      <div class="field"><label for="su-ifreq">How often</label><select id="su-ifreq">${freqOptions('biweekly')}</select></div>
+      <div class="field" id="su-icount-wrap" hidden><label for="su-icount">About how many times a year?</label><input id="su-icount" inputmode="decimal" placeholder="4"><p class="hint">If it varies, use the low end.</p></div>
+      <button type="button" class="btn ghost wide" data-action="su-add-income">Add this income</button>
+      ${nav('Next', true)}`;
+  } else if (step === 'plan') {
+    const inc = d.incomes.reduce((s2, x) => s2 + C.incomeMonthly(x), 0);
+    const bills = d.bills.reduce((s2, b) => s2 + b.amount, 0);
+    body = `<h1 tabindex="-1">A simple plan</h1><p class="muted">Two numbers. You can change them any time on the Bills tab.</p>
+      ${inc ? `<p class="note">Income averages ${C.money(inc)} a month and bills are ${C.money(bills)}, which leaves ${C.money(inc - bills)} for savings and spending.</p>` : ''}
+      ${moneyField('su-savingsMonthly', 'Send to savings each month', d.plan.savingsMonthly, { hint: 'Even $50 builds the habit.' })}
+      ${moneyField('su-weeklySpending', 'Household spending money per week', d.plan.weeklySpending, { hint: 'Groceries, gas, eating out, fun. Whatever isn’t a bill.' })}${nav('Next', true)}`;
   } else if (step === 'accounts') {
     body = `<h1 tabindex="-1">The bigger picture</h1><p class="muted">Optional. These make your net worth complete. Skip any you don’t have and fill them in later under Check-in → Monthly.</p>
       <h2 class="sub">What you own</h2>${C.ACCOUNT_FIELDS.filter((f) => f.kind === 'asset').map((f) => moneyField(`su-${f.key}`, f.label, d.accounts[f.key])).join('')}
@@ -486,7 +565,7 @@ function readSetupStep() {
   const d = ui.draft;
   const step = SETUP_STEPS[ui.setupStep];
   if (step === 'balances') { d.savings = C.parseMoney($('#su-savings').value); d.checking = C.parseMoney($('#su-checking').value); }
-  if (step === 'paycheck') for (const k of ['takeHome', 'toSavings', 'weeklySpending']) d.paycheck[k] = C.parseMoney($(`#su-${k}`).value);
+  if (step === 'plan') for (const k of ['savingsMonthly', 'weeklySpending']) d.plan[k] = C.parseMoney($(`#su-${k}`).value);
   if (step === 'accounts') {
     for (const f of C.ACCOUNT_FIELDS) d.accounts[f.key] = C.parseMoney($(`#su-${f.key}`).value);
     const r = parseInt($('#su-loan').value, 10); d.loanRemaining = Number.isFinite(r) && r >= 0 ? r : null;
@@ -497,7 +576,8 @@ async function finishSetup() {
   const d = ui.draft;
   const today = C.todayISO();
   await commit((s) => {
-    s.paycheck = { ...d.paycheck };
+    s.incomes = d.incomes.map((x) => ({ id: S.uid(), ...x }));
+    s.plan = { ...d.plan };
     s.bills = d.bills.map((b) => ({ id: S.uid(), name: b.name, category: guessCategory(b.name), amount: b.amount, endMonth: null }));
     const hasAccounts = C.ACCOUNT_FIELDS.some((f) => d.accounts[f.key] != null);
     if (hasAccounts) s.monthly = [{ month: C.monthKey(today), date: today, ...Object.fromEntries(C.ACCOUNT_FIELDS.map((f) => [f.key, d.accounts[f.key] ?? null])) }];
@@ -607,9 +687,37 @@ async function onClick(e) {
   if (a === 'su-skip') { ui.setupStep++; if (ui.setupStep >= SETUP_STEPS.length) return finishSetup(); return render(); }
   if (a === 'su-sugg') { $('#su-bname').value = t.dataset.name; $('#su-bamt').focus(); return; }
   if (a === 'su-add-bill') return setupAddBill();
+  if (a === 'su-add-income') return setupAddIncome();
+  if (a === 'su-del-income') { ui.draft.incomes.splice(Number(t.dataset.i), 1); return render(); }
+  if (a === 'su-inc-preset' || a === 'inc-preset') {
+    const pre = a === 'su-inc-preset' ? 'su-i' : 'ni-';
+    $(`#${pre}name`).value = t.dataset.name; $(`#${pre}freq`).value = t.dataset.freq;
+    $(`#${pre}count-wrap`).hidden = t.dataset.freq !== 'perYear';
+    $(`#${pre === 'su-i' ? 'su-iamt' : 'ni-amount'}`).focus(); return;
+  }
+  if (a === 'del-income') { if (!twoTap(t)) return; await commit((s) => { s.incomes = s.incomes.filter((x) => x.id !== t.dataset.id); }); toast('Income removed.'); return render(); }
   if (a === 'su-del-bill') { ui.draft.bills.splice(Number(t.dataset.i), 1); return render(); }
 }
 
+function readIncomeForm(pre, amountId, errId) {
+  const name = $(`#${pre}name`).value.trim();
+  const amount = C.parseMoney($(`#${amountId}`).value);
+  const freq = $(`#${pre}freq`).value;
+  const count = freq === 'perYear' ? Number($(`#${pre}count`).value) : null;
+  const err = $(`#${errId}`);
+  if (!name) { err.textContent = 'Give this income a name, like “Spouse’s pay”.'; $(`#${pre}name`).focus(); return null; }
+  if (amount == null || amount < 0) { err.textContent = 'Enter the take-home amount per payment, like 3500.'; $(`#${amountId}`).focus(); return null; }
+  if (freq === 'perYear' && !(count > 0)) { err.textContent = 'Enter about how many times a year it comes in, like 4.'; $(`#${pre}count`).focus(); return null; }
+  err.textContent = '';
+  return { name, amount, freq, count, reliable: freq !== 'perYear' };
+}
+function setupAddIncome() {
+  const x = readIncomeForm('su-i', 'su-iamt', 'su-error');
+  if (!x) return;
+  ui.draft.incomes.push(x);
+  render();
+  $('#su-iname').focus();
+}
 function setupAddBill() {
   const name = $('#su-bname').value.trim();
   const amount = C.parseMoney($('#su-bamt').value);
@@ -634,6 +742,12 @@ async function onSubmit(e) {
     await commit((s) => s.bills.push({ id: S.uid(), name, amount, category: $('#nb-cat').value.trim() || guessCategory(name), endMonth: $('#nb-end').value || null }));
     toast(`${name} added.`); return render();
   }
+  if (kind === 'add-income') {
+    const x = readIncomeForm('ni-', 'ni-amount', 'ni-error');
+    if (!x) return;
+    await commit((s) => s.incomes.push({ id: S.uid(), ...x }));
+    toast(`${x.name} added.`); return render();
+  }
   if (kind === 'add-contrib') {
     const name = $('#nc-name').value.trim(); const amount = C.parseMoney($('#nc-amount').value);
     if (!name || amount == null) return toast('Add a name and a monthly amount.');
@@ -647,6 +761,7 @@ async function onSubmit(e) {
   if (kind === 'setup') {
     const step = SETUP_STEPS[ui.setupStep];
     if (step === 'bills' && $('#su-bname').value.trim()) { setupAddBill(); if ($('#su-error').textContent) return; }
+    if (step === 'income' && $('#su-iname').value.trim()) { const x = readIncomeForm('su-i', 'su-iamt', 'su-error'); if (!x) return; ui.draft.incomes.push(x); }
     readSetupStep();
     if (step === 'balances' && ui.draft.savings == null) { $('#su-error').textContent = 'Enter your savings balance. Zero is fine.'; $('#su-savings').focus(); return; }
     ui.setupStep++;
@@ -661,12 +776,14 @@ async function saveWeekly() {
   const savings = C.parseMoney($('#ci-savings').value);
   const checking = C.parseMoney($('#ci-checking').value);
   const spent = C.parseMoney($('#ci-spent').value);
+  const extraIncome = C.parseMoney($('#ci-extra').value);
   const debt = $('input[name="newDebt"]:checked')?.value;
   const win = $('#ci-win').value.trim().slice(0, 140);
   if (!date || date > C.todayISO()) { err.textContent = 'Pick today or an earlier date.'; return $('#ci-date').focus(); }
   if (savings == null) { err.textContent = 'Enter your savings balance. Zero is fine.'; return $('#ci-savings').focus(); }
   if ($('#ci-checking').value.trim() && checking == null) { err.textContent = 'Checking should be a number, like 412.50.'; return $('#ci-checking').focus(); }
   if ($('#ci-spent').value.trim() && spent == null) { err.textContent = 'Spending should be a number, like 120.'; return $('#ci-spent').focus(); }
+  if ($('#ci-extra').value.trim() && extraIncome == null) { err.textContent = 'Extra income should be a number, like 3750.'; return $('#ci-extra').focus(); }
   if (!debt) { err.textContent = 'Choose yes or no for new debt.'; return $('input[name="newDebt"]').focus(); }
 
   const week = C.weekKey(date);
@@ -674,13 +791,14 @@ async function saveWeekly() {
   const existing = state.checkins.find((c) => c.week === week);
   const prior = C.sortedCheckins(state).filter((c) => c.week < week);
   const prev = prior[prior.length - 1];
-  const entry = { week, date, savings, checking, spent, newDebt: debt === 'yes', win: win || null, xp: 0, savedAt: new Date().toISOString() };
+  const entry = { week, date, savings, checking, spent, extraIncome, newDebt: debt === 'yes', win: win || null, xp: 0, savedAt: new Date().toISOString() };
   let fresh = [];
   await commit((s) => {
     s.checkins = s.checkins.filter((c) => c.week !== week);
     s.checkins.push(entry);
     const streak = C.streakInfo(s).streak;
-    entry.xp = C.checkinXP(entry, prev, Math.max(1, streak));
+    const x = C.checkinXP(entry, prev, Math.max(1, streak), { weeklySpending: s.plan.weeklySpending, startSavings: s.start?.savings });
+    entry.xp = x.total; entry.xpParts = x.parts;
     fresh = C.awardBadges(s);
   });
   const nw = C.netWorthAt(state, C.todayISO());
@@ -698,6 +816,8 @@ async function saveWeekly() {
     level: lvAfter.level,
     levelUp: lvAfter.level > before.level,
     badges: fresh,
+    xpParts: [...entry.xpParts, ...fresh.map((b) => [`Badge: ${b.name}`, 25])],
+    highlights: C.highlights(state).slice(0, 4),
   };
   ui.reward.line = C.rewardLine({ savingsChange: ui.reward.savingsChange, isFirst: ui.reward.isFirst, newDebt: entry.newDebt, streak: st.streak });
   if (location.hash !== '#checkin') history.replaceState(null, '', '#checkin');
@@ -751,10 +871,24 @@ async function onChange(e) {
     await commit((s) => { const item = s[list].find((x) => x.id === id); if (item) item[field] = v; });
     return render();
   }
+  if (t.id === 'ni-freq' || t.id === 'su-ifreq') { $(`#${t.id === 'ni-freq' ? 'ni-' : 'su-i'}count-wrap`).hidden = t.value !== 'perYear'; return; }
+  if (t.matches('[data-income]')) {
+    const id = t.dataset.income, field = t.dataset.field;
+    let v = t.type === 'checkbox' ? t.checked : t.value;
+    if (field === 'amount') { v = C.parseMoney(v); if (v == null) { toast('Amounts need to be numbers.'); return render(); } }
+    if (field === 'count') { v = Number(v); if (!(v > 0)) { toast('Enter how many times a year, like 4.'); return render(); } }
+    if (field === 'name') { v = v.trim(); if (!v) return render(); }
+    await commit((s) => {
+      const x = s.incomes.find((i) => i.id === id); if (!x) return;
+      x[field] = v;
+      if (field === 'freq') { if (v === 'perYear') { x.count = x.count || 4; x.reliable = false; } else { x.count = null; } }
+    });
+    return render();
+  }
   if (t.matches('[data-plan]')) {
     const v = C.parseMoney(t.value);
     if (t.value.trim() && v == null) { toast('Use numbers only, like 1450.'); return; }
-    await commit((s) => { s.paycheck[t.dataset.plan] = v; });
+    await commit((s) => { s.plan[t.dataset.plan] = v; });
     return render();
   }
   if (t.matches('[data-taskedit]')) {

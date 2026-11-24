@@ -1,7 +1,7 @@
 // Month Ahead — on-device storage. IndexedDB first, localStorage as a fallback.
 // Nothing here talks to a network.
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 const DB_NAME = 'month-ahead';
 const STORE = 'kv';
 const KEY = 'state';
@@ -13,10 +13,11 @@ export function emptyState() {
     createdAt: new Date().toISOString(),
     settings: { setupDone: false, lastBackupAt: null, iosPromptSeen: false },
     start: null, // { date, savings, checking, netWorth }
-    paycheck: { takeHome: null, toSavings: null, weeklySpending: null },
+    incomes: [], // { id, name, amount, freq: weekly|biweekly|semimonthly|monthly|perYear, count (perYear only), reliable }
+    plan: { savingsMonthly: null, weeklySpending: null },
     bills: [], // { id, name, category, amount, endMonth }
     contributions: [], // { id, name, amount }
-    checkins: [], // { week, date, savings, checking, spent, newDebt, win, xp, savedAt }
+    checkins: [], // { week, date, savings, checking, spent, extraIncome, newDebt, win, xp, xpParts, savedAt }
     monthly: [], // { month, date, retirement1, retirement2, college, homeValue, mortgage, studentLoan, carLoans, creditCards }
     tasks: [], // { id, text, repeat: 'once'|'weekly', done, doneWeeks }
     badges: {}, // id -> YYYY-MM-DD earned
@@ -29,6 +30,20 @@ export function emptyState() {
 const MIGRATIONS = {
   // 0 → 1: data saved before versioning existed. Fill in any missing sections.
   0: (d) => ({ ...emptyState(), ...d, settings: { ...emptyState().settings, ...(d.settings || {}) }, schemaVersion: 1 }),
+  // 1 → 2: one biweekly paycheck becomes a list of household income sources;
+  // "to savings per paycheck" becomes a monthly savings target.
+  1: (d) => {
+    const p = d.paycheck || {};
+    const r2 = (n) => Math.round(n * 100) / 100;
+    const out = { ...d, schemaVersion: 2 };
+    delete out.paycheck;
+    out.incomes = Array.isArray(d.incomes) ? d.incomes : p.takeHome != null
+      ? [{ id: uid(), name: 'My paycheck', amount: p.takeHome, freq: 'biweekly', count: null, reliable: true }]
+      : [];
+    out.plan = d.plan || { savingsMonthly: p.toSavings != null ? r2((p.toSavings * 26) / 12) : null, weeklySpending: p.weeklySpending ?? null };
+    out.checkins = (d.checkins || []).map((c) => ({ extraIncome: null, ...c }));
+    return out;
+  },
 };
 
 export function migrate(data) {
@@ -46,8 +61,9 @@ export function migrate(data) {
   const base = emptyState();
   for (const k of Object.keys(base)) if (d[k] == null) d[k] = base[k];
   d.settings = { ...base.settings, ...d.settings };
+  d.plan = { ...base.plan, ...d.plan };
   d.loan = { ...base.loan, ...d.loan, log: Array.isArray(d.loan?.log) ? d.loan.log : [] };
-  for (const k of ['bills', 'contributions', 'checkins', 'monthly', 'tasks']) if (!Array.isArray(d[k])) d[k] = [];
+  for (const k of ['incomes', 'bills', 'contributions', 'checkins', 'monthly', 'tasks']) if (!Array.isArray(d[k])) d[k] = [];
   return d;
 }
 
@@ -73,6 +89,15 @@ async function idbGet() {
     const r = tx.objectStore(STORE).get(KEY);
     r.onsuccess = () => resolve(r.result);
     r.onerror = () => reject(r.error);
+  });
+}
+async function idbSetKey(key, value) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, 'readwrite');
+    tx.objectStore(STORE).put(JSON.parse(JSON.stringify(value)), key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
   });
 }
 async function idbSet(value) {
@@ -103,7 +128,15 @@ export async function load() {
   if (raw == null) {
     try { const s = localStorage.getItem(LS_KEY); if (s) raw = JSON.parse(s); } catch { /* unavailable */ }
   }
-  return raw ? migrate(raw) : emptyState();
+  if (!raw) return emptyState();
+  const fromVersion = Number.isInteger(raw.schemaVersion) ? raw.schemaVersion : 0;
+  const data = migrate(raw);
+  if (fromVersion !== SCHEMA_VERSION) {
+    // Keep an untouched copy of the old data on the device, then save the upgraded version.
+    try { if (storageKind === 'indexeddb') await idbSetKey(`state-before-v${SCHEMA_VERSION}`, raw); } catch { /* ignore */ }
+    try { await save(data); } catch { /* still usable in memory */ }
+  }
+  return data;
 }
 
 export async function save(state) {

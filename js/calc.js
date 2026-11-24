@@ -57,16 +57,40 @@ export function billsEndingAfter(state, ym = monthKey(todayISO())) {
 }
 export function contributionsTotal(state) { return round2(state.contributions.reduce((s, c) => s + (c.amount || 0), 0)); }
 
+// ---------- Income ----------
+export const FREQS = {
+  weekly: { label: 'Every week', perYear: 52 },
+  biweekly: { label: 'Every two weeks', perYear: 26 },
+  semimonthly: { label: 'Twice a month', perYear: 24 },
+  monthly: { label: 'Once a month', perYear: 12 },
+  perYear: { label: 'A few times a year', perYear: null },
+};
+/** Average monthly amount for one income source. */
+export function incomeMonthly(src) {
+  if (!src || src.amount == null) return 0;
+  const n = src.freq === 'perYear' ? (src.count || 0) : FREQS[src.freq]?.perYear || 0;
+  return round2((src.amount * n) / 12);
+}
+export function incomeDescription(src) {
+  if (src.freq === 'perYear') return `${money(src.amount)} each, about ${src.count || 0} a year`;
+  return `${money(src.amount)} ${FREQS[src.freq]?.label.toLowerCase() || ''}`;
+}
+
 export function planMonthly(state) {
-  const p = state.paycheck || {};
-  const income = p.takeHome != null ? round2(p.takeHome * 26 / 12) : null;
-  const toSavings = p.toSavings != null ? round2(p.toSavings * 26 / 12) : null;
-  const spending = p.weeklySpending != null ? round2(p.weeklySpending * 52 / 12) : null;
+  const pl = state.plan || {};
+  const incomes = state.incomes || [];
+  const reliable = round2(incomes.filter((s) => s.reliable !== false).reduce((s, x) => s + incomeMonthly(x), 0));
+  const irregular = round2(incomes.filter((s) => s.reliable === false).reduce((s, x) => s + incomeMonthly(x), 0));
+  const income = incomes.length ? round2(reliable + irregular) : null;
+  const toSavings = pl.savingsMonthly ?? null;
+  const spending = pl.weeklySpending != null ? round2(pl.weeklySpending * 52 / 12) : null;
   const bills = billsTotal(state);
   const contrib = contributionsTotal(state);
-  const leftover = income != null ? round2(income - bills - contrib - (toSavings || 0) - (spending || 0)) : null;
-  const weeklySavingsPlan = p.toSavings != null ? round2(p.toSavings * 26 / 52) : null;
-  return { income, toSavings, spending, bills, contrib, leftover, weeklySavingsPlan };
+  const out = bills + contrib + (toSavings || 0) + (spending || 0);
+  const leftover = income != null ? round2(income - out) : null;
+  const leftoverReliable = income != null ? round2(reliable - out) : null;
+  const weeklySavingsPlan = toSavings != null ? round2(toSavings * 12 / 52) : null;
+  return { income, reliable, irregular, toSavings, spending, bills, contrib, leftover, leftoverReliable, weeklySavingsPlan };
 }
 
 // ---------- Balances & net worth ----------
@@ -107,6 +131,112 @@ export function netWorthAt(state, iso) {
   return round2(total);
 }
 export function monthlyWorth(state, entry) { return netWorthAt(state, entry.date); }
+export function debtsOf(m) { return m ? ACCOUNT_FIELDS.filter((f) => f.kind === 'debt').reduce((s, f) => s + (m[f.key] || 0), 0) : 0; }
+
+// ---------- Cash flow: surpluses and spending ----------
+const cashTotal = (state, iso) => { const c = cashAt(state, iso); return round2((c.savings || 0) + (c.checking || 0)); };
+
+/** Per month: cash (savings + checking) at the month's last check-in, and the change from the month before.
+ *  A positive change is a surplus: more came in than went out. */
+export function monthlySurpluses(state) {
+  const cs = sortedCheckins(state);
+  const lastByMonth = new Map();
+  for (const c of cs) lastByMonth.set(monthKey(c.date), c);
+  const points = [];
+  if (state.start) points.push({ month: monthKey(state.start.date), date: state.start.date, cash: round2((state.start.savings || 0) + (state.start.checking || 0)), isStart: true });
+  for (const [month, c] of [...lastByMonth].sort()) points.push({ month, date: c.date, cash: cashTotal(state, c.date) });
+  const current = monthKey(todayISO());
+  const out = [];
+  for (let i = 1; i < points.length; i++) {
+    out.push({ month: points[i].month, cash: points[i].cash, change: round2(points[i].cash - points[i - 1].cash), complete: points[i].month < current });
+  }
+  return out;
+}
+
+/** Spending vs plan for each check-in that recorded spending. */
+export function spendingWeeks(state) {
+  const plan = state.plan?.weeklySpending;
+  return sortedCheckins(state).filter((c) => c.spent != null).map((c) => ({ date: c.date, spent: c.spent, plan, under: plan != null && c.spent <= plan }));
+}
+export function underBudgetStreak(state) {
+  const w = spendingWeeks(state);
+  let n = 0;
+  for (let i = w.length - 1; i >= 0 && w[i].under; i--) n++;
+  return n;
+}
+/** Average spending of the last 4 recorded weeks vs the 4 before. */
+export function spendingTrend(state) {
+  const w = spendingWeeks(state);
+  if (w.length < 6) return null;
+  const recent = w.slice(-4), before = w.slice(-8, -4);
+  const avg = (a) => a.reduce((s, x) => s + x.spent, 0) / a.length;
+  const a = avg(recent), b = avg(before);
+  if (!b) return null;
+  return { recent: a, before: b, change: (a - b) / b };
+}
+export function noDebtStreak(state) {
+  const cs = sortedCheckins(state);
+  let n = 0;
+  for (let i = cs.length - 1; i >= 0 && cs[i].newDebt === false; i--) n++;
+  return n;
+}
+/** Share of a week's extra income that ended up in savings (0–1), or null. */
+export function bankedShare(c, prev, startSavings) {
+  if (!c || !c.extraIncome || c.extraIncome <= 0) return null;
+  const base = prev ? prev.savings : startSavings;
+  if (base == null) return null;
+  return Math.max(0, Math.min(1, (c.savings - base) / c.extraIncome));
+}
+
+// ---------- Highlights: positive reinforcement for more than savings ----------
+/** Things that went well, most notable first. Each: { kind, title, text }. */
+export function highlights(state) {
+  const out = [];
+  const cs = sortedCheckins(state);
+  const last = cs[cs.length - 1], prev = cs[cs.length - 2];
+  const today = todayISO();
+
+  // Extra income banked
+  if (last) {
+    const share = bankedShare(last, prev, state.start?.savings);
+    if (share != null && share >= 0.25) out.push({ kind: 'extra', title: `Banked ${Math.round(share * 100)}% of your extra income`, text: `${moneyShort(last.extraIncome)} came in on top of your regular pay, and ${moneyShort(share * last.extraIncome)} of it stayed in savings.` });
+  }
+  // Surplus month
+  const sur = monthlySurpluses(state);
+  const lastDone = [...sur].reverse().find((m) => m.complete);
+  const thisMonth = sur.find((m) => m.month === monthKey(today));
+  if (lastDone && lastDone.change > 0) out.push({ kind: 'surplus', title: `${monthLabel(lastDone.month, true).split(' ')[0]} ended ${moneyShort(lastDone.change)} ahead`, text: 'You finished the month with more cash than you started it with. That is a surplus month.' });
+  if (thisMonth && thisMonth.change > 0) out.push({ kind: 'surplus', title: `Up ${moneyShort(thisMonth.change)} so far this month`, text: 'Savings plus checking are higher than at the end of last month.' });
+  const surplusCount = sur.filter((m) => m.complete && m.change > 0).length;
+  if (surplusCount >= 2) out.push({ kind: 'surplus', title: `${surplusCount} surplus months`, text: 'Months where you came out ahead. Each one is a month you were not living paycheck to paycheck.' });
+  // Spending
+  if (last && last.spent != null && state.plan?.weeklySpending != null && last.spent <= state.plan.weeklySpending) {
+    const n = underBudgetStreak(state);
+    out.push({ kind: 'spending', title: n > 1 ? `${n} weeks in a row under your spending plan` : 'Under your spending plan this week', text: `You spent ${moneyShort(last.spent)} of ${moneyShort(state.plan.weeklySpending)}, leaving ${moneyShort(state.plan.weeklySpending - last.spent)} unspent.` });
+  }
+  const trend = spendingTrend(state);
+  if (trend && trend.change <= -0.05) out.push({ kind: 'spending', title: `Spending down ${Math.round(-trend.change * 100)}%`, text: `Your last four weeks averaged ${moneyShort(trend.recent)}, down from ${moneyShort(trend.before)} the four weeks before.` });
+  // Debt
+  const ms = sortedMonthly(state);
+  if (ms.length >= 2) {
+    const [a, b] = ms.slice(-2);
+    const drop = debtsOf(a) - debtsOf(b);
+    if (drop > 1) out.push({ kind: 'debt', title: `Debt down ${moneyShort(drop)}`, text: `Total owed fell between ${monthLabel(a.month)} and ${monthLabel(b.month)}.` });
+  }
+  const nd = noDebtStreak(state);
+  if (nd >= 2) out.push({ kind: 'debt', title: `${nd} check-ins with no new debt`, text: 'Every week without borrowing keeps your progress yours.' });
+  // Net worth high
+  if (cs.length >= 2) {
+    const nw = netWorthAt(state, today);
+    const pastMax = Math.max(state.start?.netWorth ?? -Infinity, ...cs.slice(0, -1).map((c) => netWorthAt(state, c.date)));
+    if (nw > pastMax) out.push({ kind: 'worth', title: 'New net worth high', text: `${money(nw, { cents: false })} is the highest since you started tracking.` });
+  }
+  // Logging consistency
+  const st = streakInfo(state);
+  if (st.streak >= 2) out.push({ kind: 'logging', title: `${st.streak}-week check-in streak`, text: 'Looking at your numbers every week is the habit everything else is built on.' });
+  if (ms.length && ms[ms.length - 1].month === monthKey(today)) out.push({ kind: 'logging', title: 'Monthly update done', text: 'Your full picture is current for this month.' });
+  return out;
+}
 
 // ---------- Buffer ----------
 export const BUFFER_TARGETS = [1, 3, 6];
@@ -178,22 +308,28 @@ export function streakInfo(state) {
 }
 
 /** XP for one check-in, given the previous check-in and the streak after saving. */
-export function checkinXP(c, prev, streakAfter) {
-  let xp = 50;
-  if (c.checking != null) xp += 10;
-  if (c.spent != null) xp += 10;
-  if (c.win) xp += 10;
-  if (c.newDebt === false) xp += 15;
-  if (prev && c.savings > prev.savings) xp += 20;
-  xp += 5 * Math.min(streakAfter, 10);
-  return xp;
+/** XP for one check-in. Returns { total, parts } so the reward screen can show what earned it. */
+export function checkinXP(c, prev, streakAfter, { weeklySpending = null, startSavings = null } = {}) {
+  const parts = [['Checked in', 50]];
+  if (c.checking != null) parts.push(['Logged checking', 10]);
+  if (c.spent != null) parts.push(['Logged spending', 10]);
+  if (c.win) parts.push(['Named a win', 10]);
+  if (c.newDebt === false) parts.push(['No new debt', 15]);
+  if (prev && c.savings > prev.savings) parts.push(['Savings grew', 20]);
+  if (c.spent != null && weeklySpending != null && c.spent <= weeklySpending) parts.push(['Under spending plan', 15]);
+  const share = bankedShare(c, prev, startSavings);
+  if (share != null && share >= 0.5) parts.push(['Banked extra income', 20]);
+  if (streakAfter > 0) parts.push([`Streak bonus (${streakAfter} wk)`, 5 * Math.min(streakAfter, 10)]);
+  return { total: parts.reduce((s, p) => s + p[1], 0), parts };
 }
 export function totalXP(state) {
   const fromCheckins = state.checkins.reduce((s, c) => s + (c.xp || 0), 0);
-  const fromMonthly = state.monthly.length * 40;
+  const ms = sortedMonthly(state);
+  const fromMonthly = ms.length * 40 + ms.reduce((s, m, i) => s + (i > 0 && debtsOf(m) < debtsOf(ms[i - 1]) - 1 ? 20 : 0), 0);
+  const fromSurplus = monthlySurpluses(state).filter((m) => m.complete && m.change > 0).length * 30;
   const fromTasks = state.tasks.reduce((s, t) => s + 10 * (t.repeat === 'weekly' ? (t.doneWeeks || []).length : t.done ? 1 : 0), 0);
   const fromBadges = Object.keys(state.badges).length * 25;
-  return fromCheckins + fromMonthly + fromTasks + fromBadges;
+  return fromCheckins + fromMonthly + fromSurplus + fromTasks + fromBadges;
 }
 const levelFloor = (n) => 50 * (n - 1) * n; // L1 0, L2 100, L3 300, L4 600, L5 1000…
 export function levelInfo(xp) {
@@ -217,6 +353,16 @@ export const BADGES = [
   { id: 'buffer-1', name: 'One month ahead', desc: 'A full month of bills saved.', celebrate: true },
   { id: 'buffer-2', name: 'Two months ahead', desc: 'Two months of bills saved.' },
   { id: 'buffer-3', name: 'Three months ahead', desc: 'Three months of bills saved. A real cushion.', celebrate: true },
+  { id: 'under-1', name: 'Under plan', desc: 'Spent less than your weekly spending plan.' },
+  { id: 'under-4', name: 'Four under', desc: 'Four check-ins in a row under your spending plan.', celebrate: true },
+  { id: 'spend-down', name: 'Trimmed', desc: 'Four-week spending average down 10% or more.' },
+  { id: 'surplus-1', name: 'Surplus month', desc: 'Finished a month with more cash than you started it with.', celebrate: true },
+  { id: 'surplus-3', name: 'Three surplus months', desc: 'Three months where you came out ahead.', celebrate: true },
+  { id: 'debt-down', name: 'Debt shrinking', desc: 'Total debt went down between monthly updates.' },
+  { id: 'cards-zero', name: 'Cards cleared', desc: 'Credit card balances down to zero.', celebrate: true },
+  { id: 'banked-extra', name: 'Banked the bonus', desc: 'Kept at least half of an extra payment in savings.' },
+  { id: 'checkins-10', name: '10 check-ins', desc: 'Ten weekly check-ins logged.' },
+  { id: 'checkins-25', name: '25 check-ins', desc: 'Twenty-five weekly check-ins logged.' },
   { id: 'first-monthly', name: 'Big picture', desc: 'Saved your first monthly update.' },
   { id: 'net-up', name: 'Net worth up', desc: 'Total worth is higher than when you started.' },
   { id: 'first-backup', name: 'Safe copy', desc: 'Downloaded or copied your first backup.' },
@@ -242,6 +388,25 @@ export function earnedBadgeIds(state) {
     if (b >= 1) ids.add('buffer-1');
     if (b >= 2) ids.add('buffer-2');
     if (b >= 3) ids.add('buffer-3');
+  }
+  if (cs.length >= 10) ids.add('checkins-10');
+  if (cs.length >= 25) ids.add('checkins-25');
+  const sw = spendingWeeks(state);
+  let run = 0;
+  for (const w of sw) { run = w.under ? run + 1 : 0; if (run >= 1) ids.add('under-1'); if (run >= 4) ids.add('under-4'); }
+  const tr = spendingTrend(state);
+  if (tr && tr.change <= -0.1) ids.add('spend-down');
+  const surplusMonths = monthlySurpluses(state).filter((m) => m.complete && m.change > 0).length;
+  if (surplusMonths >= 1) ids.add('surplus-1');
+  if (surplusMonths >= 3) ids.add('surplus-3');
+  const ms = sortedMonthly(state);
+  for (let i = 1; i < ms.length; i++) {
+    if (debtsOf(ms[i]) < debtsOf(ms[i - 1]) - 1) ids.add('debt-down');
+    if ((ms[i - 1].creditCards || 0) > 0 && ms[i].creditCards === 0) ids.add('cards-zero');
+  }
+  for (let i = 0; i < cs.length; i++) {
+    const share = bankedShare(cs[i], cs[i - 1], state.start?.savings);
+    if (share != null && share >= 0.5) ids.add('banked-extra');
   }
   if (state.monthly.length) ids.add('first-monthly');
   if (state.start && cs.length && netWorthAt(state, todayISO()) > state.start.netWorth) ids.add('net-up');
@@ -306,13 +471,20 @@ export function insights(state) {
   const cs = sortedCheckins(state);
   const plan = planMonthly(state);
   const pace = savingsPace(state);
-  const p = state.paycheck || {};
+  const p = state.plan || {};
   const ym = monthKey(todayISO());
+  const irregularSrc = (state.incomes || []).filter((s) => s.reliable === false && s.amount);
 
   if (plan.leftover != null && plan.leftover < 0) {
-    out.push({ tone: 'heads-up', text: `Your plan spends ${moneyShort(-plan.leftover)} more per month than your paychecks bring in. Trimming weekly spending money or a bill would close the gap.` });
+    out.push({ tone: 'heads-up', text: `Your plan spends ${moneyShort(-plan.leftover)} more per month than your household brings in. Trimming weekly spending money or a bill would close the gap.` });
+  } else if (plan.leftoverReliable != null && plan.leftoverReliable < 0 && irregularSrc.length) {
+    out.push({ tone: 'heads-up', text: `Your plan balances only when ${irregularSrc.map((s) => s.name).join(' and ')} money comes in. In months without it you run about ${moneyShort(-plan.leftoverReliable)} short, so your buffer has to cover those months.` });
   } else if (plan.leftover != null && plan.leftover > 25) {
     out.push({ tone: 'tip', text: `Your plan leaves about ${moneyShort(plan.leftover)} a month unassigned. Sending part of it to savings would speed up your next milestone.` });
+  }
+  if (irregularSrc.length && plan.leftoverReliable != null && plan.leftoverReliable >= 0) {
+    const yearly = irregularSrc.reduce((s, x) => s + incomeMonthly(x) * 12, 0);
+    out.push({ tone: 'tip', text: `Your regular pay covers the plan by itself. If half of your ${irregularSrc.map((s) => s.name).join(' and ')} income (about ${moneyShort(yearly)} a year) went straight to savings, that alone would add ${moneyShort(yearly / 2)} a year.` });
   }
 
   const ending = billsEndingAfter(state, ym);
@@ -356,7 +528,7 @@ export function summaryText(state, { withPrompt = true } = {}) {
   const today = todayISO();
   const L = [];
   if (withPrompt) {
-    L.push('I track my money weekly in an app called Month Ahead. My goal is to stop living paycheck to paycheck and build a cash buffer (first 1 month of bills saved, then 3). Here is my latest summary. Please give me encouraging, specific feedback on how this week and the trend look, and 2 or 3 concrete suggestions for the coming week.');
+    L.push('I track our household money weekly in an app called Month Ahead. The goal is to stop living paycheck to paycheck: run monthly surpluses, keep spending in check, avoid new debt, pay debt down, and build a cash buffer (first 1 month of bills saved, then 3). Here is my latest summary. Please give me encouraging, specific feedback on how this week and the trend look, and 2 or 3 concrete suggestions for the coming week.');
     L.push('');
   }
   L.push(`MONTH AHEAD SUMMARY (${dateLabel(today, true)})`);
@@ -371,11 +543,18 @@ export function summaryText(state, { withPrompt = true } = {}) {
   const ending = billsEndingAfter(state, monthKey(today));
   if (ending.length) L.push(`Bills ending after this month: ${ending.map((x) => `${x.name} (${money(x.amount)})`).join(', ')}`);
   const plan = planMonthly(state);
-  const p = state.paycheck || {};
-  if (p.takeHome != null) {
-    L.push(`Paycheck plan: ${money(p.takeHome)} take-home every two weeks (about ${money(plan.income)} a month); ${money(p.toSavings ?? 0)} to savings per check; ${money(p.weeklySpending ?? 0)} a week spending money.`);
-    L.push(`Unassigned after bills, savings contributions, savings and spending: ${money(plan.leftover)} a month.`);
+  const p = state.plan || {};
+  if ((state.incomes || []).length) {
+    L.push('Household take-home income:');
+    for (const s of state.incomes) L.push(`- ${s.name}: ${incomeDescription(s)} (about ${money(incomeMonthly(s))}/mo${s.reliable === false ? ', irregular' : ''})`);
+    L.push(`Average monthly income: ${money(plan.income)} (reliable: ${money(plan.reliable)}, irregular: ${money(plan.irregular)})`);
+    L.push(`Plan: ${money(p.savingsMonthly ?? 0)}/month to savings; ${money(p.weeklySpending ?? 0)}/week spending money.`);
+    L.push(`Unassigned each month after bills, contributions, savings and spending: ${money(plan.leftover)} on average, ${money(plan.leftoverReliable)} on reliable income only.`);
   }
+  const sur = monthlySurpluses(state).slice(-4);
+  if (sur.length) L.push(`Monthly cash change (savings + checking): ${sur.map((m) => `${monthLabel(m.month)} ${signed(m.change, false)}${m.complete ? '' : ' so far'}`).join('; ')}`);
+  const hl = highlights(state);
+  if (hl.length) L.push(`Recent wins the app noticed: ${hl.map((h) => h.title).join('; ')}.`);
   if (state.contributions.length) L.push(`Savings contributions (not bills): ${state.contributions.map((c) => `${c.name} ${money(c.amount)}/mo`).join(', ')}`);
   const m = nextMilestone(state);
   if (m) L.push(`Next milestone: ${m.target} months of bills (${money(m.amount)}), ${money(Math.max(0, m.needed))} to go.${m.projected ? ` Projected ${dateLabel(m.projected, true)} at ${moneyShort(m.pace.perWeek)}/week.` : ''}`);
@@ -387,7 +566,7 @@ export function summaryText(state, { withPrompt = true } = {}) {
     L.push('');
     L.push('Recent weekly check-ins:');
     for (const c of cs) {
-      L.push(`- ${dateLabel(c.date, true)}: savings ${money(c.savings)}${c.checking != null ? `, checking ${money(c.checking)}` : ''}${c.spent != null ? `, spent ${money(c.spent)}` : ''}, new debt: ${c.newDebt ? 'yes' : 'no'}${c.win ? `, win: "${c.win}"` : ''}`);
+      L.push(`- ${dateLabel(c.date, true)}: savings ${money(c.savings)}${c.checking != null ? `, checking ${money(c.checking)}` : ''}${c.spent != null ? `, spent ${money(c.spent)}` : ''}${c.extraIncome ? `, extra income ${money(c.extraIncome)}` : ''}, new debt: ${c.newDebt ? 'yes' : 'no'}${c.win ? `, win: "${c.win}"` : ''}`);
     }
   }
   const ms = sortedMonthly(state);

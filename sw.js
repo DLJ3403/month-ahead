@@ -2,7 +2,7 @@
 // works offline. It never touches your data (that lives in IndexedDB) and never
 // contacts any other website.
 // When the app's code changes, bump CACHE_VERSION so phones pick up the update.
-const CACHE_VERSION = 'month-ahead-v1.0.0';
+const CACHE_VERSION = 'month-ahead-v1.1.0';
 const ASSETS = [
   './',
   './index.html',

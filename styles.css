@@ -306,3 +306,33 @@ dialog form { display: flex; flex-direction: column; gap: 14px; }
   *, *::before, *::after { transition: none !important; animation: none !important; }
 }
 @media (max-width: 360px) { .stats, .reward-grid, .deltas { grid-template-columns: 1fr; } }
+
+/* Highlights, cash flow, surplus bars, income (v1.1) */
+.flow { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.flow p { display: flex; flex-direction: column; background: var(--surface-2); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; }
+.flow .num { font-weight: 650; font-size: 1.05rem; }
+.hl-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+.hl { display: flex; gap: 12px; align-items: flex-start; }
+.hl-icon { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 12px; background: var(--good-soft); color: var(--good); flex: none; }
+.hl-debt .hl-icon, .hl-spending .hl-icon { background: var(--accent-soft); color: var(--accent); }
+.hl-logging .hl-icon, .hl-worth .hl-icon { background: var(--warn-soft); color: var(--gold); }
+.hl-kind { font-size: .72rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.hl-title { font-weight: 700; }
+.highlights { display: flex; flex-direction: column; gap: 10px; }
+.xp-detail summary { cursor: pointer; font-weight: 600; color: var(--accent); min-height: 44px; display: flex; align-items: center; }
+.xp-detail ul { list-style: none; margin: 0; padding: 0; }
+.xp-detail li { display: flex; justify-content: space-between; padding: 6px 0; border-top: 1px solid var(--line); }
+.surplus { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.surplus li { display: grid; grid-template-columns: 5.5rem minmax(0, 1fr) auto; gap: 10px; align-items: center; font-size: .92rem; }
+.s-bar { height: 10px; background: var(--surface-2); border-radius: 99px; overflow: hidden; }
+.s-bar span { display: block; height: 100%; border-radius: 99px; }
+.s-bar .up { background: var(--good); }
+.s-bar .down { background: var(--muted); opacity: .6; }
+.sub-form { border-top: 1px solid var(--line); padding-top: 14px; display: flex; flex-direction: column; gap: 14px; }
+.sub-form h3 { font-size: 1rem; }
+.bill-meta select { width: auto; min-height: 44px; font-size: .9rem; }
+.bill-meta .count { width: 4.5rem; flex: none; min-height: 44px; }
+.switch.small { min-height: 40px; font-weight: 500; font-size: .9rem; }
+.plan-table .indent { padding-left: 14px; color: var(--muted); font-size: .9rem; }
+.draft-bills li > span:first-child { min-width: 0; }
+@media (max-width: 360px) { .flow { grid-template-columns: 1fr; } .surplus li { grid-template-columns: 4.5rem minmax(0,1fr); } .surplus li .num { grid-column: 1 / -1; } }

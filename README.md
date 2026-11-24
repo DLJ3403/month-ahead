@@ -11,6 +11,13 @@ and is published to GitHub Pages by `.github/workflows/pages.yml`.
 - User data lives only in IndexedDB (`month-ahead` DB, `kv` store, key `state`),
   with localStorage as a fallback.
 
+## Data model (schema v2)
+- `incomes[]`: household take-home sources, each `{ name, amount, freq, count, reliable }`.
+  `freq` is weekly / biweekly / semimonthly / monthly / perYear; `count` is payments a year for perYear.
+- `plan`: `{ savingsMonthly, weeklySpending }`.
+- `checkins[].extraIncome`: irregular money that arrived that week (e.g. a class payment).
+- Surplus months, spending trend, debt paydown and highlights are all derived in `js/calc.js`.
+
 ## Files
 - `js/calc.js`  pure calculations (net worth, buffer, streaks, XP, badges, insights, summary text)
 - `js/store.js` storage, schema version + migrations, backup import/export
